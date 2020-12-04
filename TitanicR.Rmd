@@ -1,0 +1,240 @@
+---
+title: "TitanicR"
+author: "Michael Doherty"
+date: "26/10/2020"
+output: html_document
+---
+
+#### REQUIRED PACKAGES ####
+```{r}
+library(caret)
+library(naniar)
+library(ggplot2)
+library(tidyverse)
+library(ggcorrplot)
+library(randomForest)
+library(stringr)
+library(outliers)
+library(EnvStats)
+```
+
+#### CLEANING ####
+
+# IMPORT DATA
+```{r}
+train <- read.csv('train.csv')
+```
+
+# RE-ORDERING TARGET COLUMN
+```{r}
+train <- train[c(1,3:12,2)]
+```
+
+# SETTING SURVIVED VARIABLE TO EITHER YES/NO
+```{r}
+train$Survived[train$Survived > 0] <- "YES"
+train$Survived[train$Survived == 0] <- "NO"
+train$Survived <- as.factor(train$Survived)
+```
+
+#### OUTLIER DETECTION ####
+```{r}
+rosnerTest(train$Age, k=3)
+rosnerTest(train$SibSp, k=50)
+rosnerTest(train$Parch, k=50)
+rosnerTest(train$Fare, k=60)
+```
+
+
+
+#### FEATURE ENGINEERING ####
+
+# family size
+
+# Extract Title from name
+```{r}
+train$title <- str_split_fixed(train$Name, " ", 3)[,2]
+```
+
+
+# Extract the numeric from Ticket
+```{r}
+train$numTicket <- gsub("[^0-9\\]", "", train$Ticket)
+```
+
+# Extracting the first alphabetic character from the ticket
+```{r}
+train$char1Ticket <- substr(trimws(gsub('[[:digit:]]+', '', train$Ticket)), 1, 1)
+```
+
+# Extracting the first alphabetic character from the cabin
+```{r}
+train$charCabin <- substr(trimws(gsub('[[:digit:]]+', '', train$Cabin)), 1, 1)
+```
+
+# Extracting the mean of the cabin numerics
+```{r}
+train$meanCabin <- unlist(lapply(lapply(strsplit(gsub("[^0-9\\ ]", "", train$Cabin), " "), as.numeric), mean))
+```
+
+# Extracting the number of cabins for each ticket
+```{r}
+train$nCabins <- lengths(strsplit(as.character(train$Cabin), " "))
+```
+
+
+# FIXING DATA TYPES AND MAKING NAs CONSISTENT
+```{r}
+NAs <- c("?", "none", "NA", "NaN", "null", "N A", "N/A", "Null", "None", " ", "")
+train <- type.convert(train, na.strings = NAs)
+```
+
+# RE-ORDERING AGAIN
+```{r}
+train
+train <- train[c(1:11,13:(ncol(train)),12)]
+```
+
+# DROPPING REDUNDANT COLUMNS
+```{r}
+train <- train[c(1,2,4:7,9,11:18)]
+train
+```
+
+#### EDA ####
+
+# How many NAs?
+```{r}
+vis_miss(train)
+sapply(train, function(x) sum(is.na(x)))
+```
+
+# Frequency distibution of Survival
+```{r}
+train %>%
+  ggplot(aes(x= Survived)) +
+  geom_bar(width = 0.5, fill='steelblue') +
+  ylim(0, 600) +
+  geom_text(stat = 'count', aes(label=..count..), vjust=-1)+
+  ggtitle('Survival Distribution') +
+  xlab('Survival Outcome')
+```
+
+# Passenger Class Distribution
+```{r}
+train %>%
+  ggplot(aes(x= Pclass)) +
+  geom_bar(width = 0.5, fill='steelblue') +
+  ylim(0, 600) +
+  geom_text(stat = 'count', aes(label=..count..), vjust=-1)+
+  ggtitle('Class Distribution')+
+  xlab('Passenger Class')
+```
+
+
+# Passenger Sex Distribution
+```{r}
+train %>%
+  ggplot(aes(x= Sex)) +
+  geom_bar(width = 0.5, fill='steelblue') +
+  ylim(0, 600) +
+  geom_text(stat = 'count', aes(label=..count..), vjust=-1)+
+  ggtitle('Sex Distribution')+
+  xlab('Passenger Sex')
+```
+
+# Passenger Age Distribution
+```{r}
+train %>%
+  ggplot(aes(x= Age)) +
+  geom_density(color='darkblue', fill='lightblue') +
+  ggtitle('Passenger Age Density Plot') +
+  xlab('Passenger Age (years)')
+```
+
+# Sibling Spouse Distribution
+```{r}
+train %>%
+  ggplot(aes(x= SibSp)) +
+  geom_bar(width = 0.5, fill='steelblue') +
+  ylim(0, 250) +
+  geom_text(stat = 'count', aes(label=..count..), vjust=-1)+
+  ggtitle('Sibling/Spouse Distribution')+
+  xlab('# Of siblings or spouses onboard')
+```
+
+# Mixed data-type correlation plot
+```{r}
+source('cor2 correlations.r')
+cor2(train)
+ggcorrplot(cor2(train), outline.col = "white", lab = TRUE, title = "Mixed data-type correlation plot for patients without CVD.")
+```
+
+# Random Forest Variable Importance Plot
+```{r}
+rf <- randomForest(Survived~., data = train, ntree=1000, keep.forest=FALSE, importance=TRUE, na.action = na.omit)
+varImpPlot(rf)
+```
+
+# Feature Selection
+```{r}
+train <- train[
+  c(
+    1, #PassengerID
+    2, #Pclass
+    4, #Sex
+    3, #Age
+    5, #SibSp
+    #6, #Parch
+    7, #Fare
+    8, #Embarked
+    9, #title
+    10, #numTicket
+    11, #char1Ticket
+    12, #charCabin
+    13, #meanCabins
+    14, #nCabins
+    15 #Survived
+  )
+]
+```
+
+# Dummy Vars in Caret
+```{r}
+dummy <- dummyVars("~.", data=train)
+train2 <- data.frame(predict(dummy, newdata = train))
+train2
+levels(train2$Survived)
+```
+
+# Replace Nas with zeroes
+```{r}
+train2[is.na(train2)] <- 0
+train2 <- train2[-(ncol(train2)-1)]
+colnames(train2) <- c(colnames(train2[-ncol(train2)]), "Survived")
+train2$Survived <- as.factor(train2$Survived)
+levels(train2$Survived) <- c("NO", "YES")
+```
+
+
+
+# Logistic Regression Model
+```{r}
+default_log_mod = caret::train(
+  form = Survived ~ .,
+  data = train2,
+  trControl = trainControl(method = "repeatedcv", number = 5, classProbs = TRUE, summaryFunction = twoClassSummary, repeats=100),
+  method = "glm",
+  family = "binomial",
+  na.action = "na.exclude",
+  metric = "ROC"
+)
+
+default_log_mod$results
+CV_ConfusionMatrix <- confusionMatrix(default_log_mod)
+CV_ConfusionMatrix
+```
+
+
+
+
